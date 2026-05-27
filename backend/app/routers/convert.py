@@ -4,8 +4,6 @@ from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse
 
 from ..utils import UPLOAD_DIR, MAX_FILE_SIZE, get_ext, change_ext, cleanup_file
-from ..converters.document import convert_document
-from ..converters.data import convert_data
 
 router = APIRouter(prefix="/api", tags=["convert"])
 
@@ -80,6 +78,9 @@ async def convert_file(file: UploadFile = File(...), target_format: str = Form(.
 
 
 def _route_conversion(input_path: Path, source_ext: str, target_ext: str) -> Path:
+    from ..converters.document import convert_document
+    from ..converters.data import convert_data
+
     doc_formats = DOCUMENT_FORMATS | {"html", "md", "txt", "csv"}
 
     if source_ext in doc_formats or target_ext in doc_formats:
