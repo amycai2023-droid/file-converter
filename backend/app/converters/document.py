@@ -1,125 +1,108 @@
 import subprocess
-import tempfile
+import json
+import io
+import csv
 from pathlib import Path
-from .data import csv_to_xlsx, xlsx_to_csv, json_to_csv
+from .data import csv_to_xlsx
 
-import fitz
 import pdfplumber
 from docx import Document
 
 
 def convert_document(input_path: Path, source_ext: str, target_ext: str) -> Path:
     output_path = input_path.with_suffix(f".{target_ext}")
-
     s, t = source_ext, target_ext
 
-    # --- PDF sources ---
     if s == "pdf":
         return _convert_from_pdf(input_path, t, output_path)
-
-    # --- DOCX sources ---
     if s == "docx":
         return _convert_from_docx(input_path, t, output_path)
-
-    # --- XLSX sources ---
     if s == "xlsx":
         return _convert_from_xlsx(input_path, t, output_path)
+    if s == "html":
+        return _convert_from_html(input_path, t, output_path)
+    if s == "md":
+        return _convert_from_md(input_path, t, output_path)
 
-    # --- Use Pandoc for most other document conversions ---
-    if s in ("md", "html", "txt", "rtf", "doc", "tex") or t in ("md", "html", "txt", "rtf", "doc", "tex", "docx", "pdf"):
-        return _pandoc_convert(input_path, s, t, output_path)
+    if s == "txt" and t == "docx":
+        return _txt_to_docx(input_path, output_path)
+    if s == "txt" and t == "pdf":
+        return _txt_to_pdf(input_path, output_path)
 
     raise ValueError(f"Unsupported conversion: {s} -> {t}")
 
 
 def _convert_from_pdf(input_path: Path, target: str, output_path: Path) -> Path:
     if target == "txt":
-        doc = fitz.open(input_path)
         text = ""
-        for page in doc:
-            text += page.get_text()
-        doc.close()
+        with pdfplumber.open(input_path) as pdf:
+            for page in pdf.pages:
+                t = page.extract_text()
+                if t:
+                    text += t + "\n"
         output_path.write_text(text, encoding="utf-8")
         return output_path
 
     if target == "html":
-        doc = fitz.open(input_path)
-        html_parts = ['<!DOCTYPE html><html><head><meta charset="utf-8"><title>PDF</title></head><body>']
-        for page in doc:
-            html_parts.append(page.get_text("html"))
-        html_parts.append('</body></html>')
-        doc.close()
-        output_path.write_text("\n".join(html_parts), encoding="utf-8")
+        parts = ['<!DOCTYPE html><html><head><meta charset="utf-8"><title>PDF</title></head><body>']
+        with pdfplumber.open(input_path) as pdf:
+            for i, page in enumerate(pdf.pages):
+                text = page.extract_text()
+                if text:
+                    parts.append(f'<h2>Page {i+1}</h2>')
+                    for line in text.split("\n"):
+                        parts.append(f'<p>{line}</p>')
+        parts.append('</body></html>')
+        output_path.write_text("\n".join(parts), encoding="utf-8")
         return output_path
 
     if target == "docx":
-        doc = fitz.open(input_path)
-        document = Document()
-        for page in doc:
-            text = page.get_text()
-            for line in text.split("\n"):
-                if line.strip():
-                    document.add_paragraph(line.strip())
-        doc.close()
-        document.save(str(output_path))
+        doc = Document()
+        with pdfplumber.open(input_path) as pdf:
+            for page in pdf.pages:
+                text = page.extract_text()
+                if text:
+                    for line in text.split("\n"):
+                        if line.strip():
+                            doc.add_paragraph(line.strip())
+        doc.save(str(output_path))
         return output_path
 
     if target == "md":
-        doc = fitz.open(input_path)
         text = ""
-        for page in doc:
-            text += page.get_text()
-        doc.close()
+        with pdfplumber.open(input_path) as pdf:
+            for page in pdf.pages:
+                t = page.extract_text()
+                if t:
+                    text += t + "\n\n"
         output_path.write_text(text, encoding="utf-8")
         return output_path
 
     if target in ("csv", "xlsx", "json"):
         return _pdf_extract_table(input_path, target, output_path)
 
-    if target == "images":
-        doc = fitz.open(input_path)
-        image_dir = output_path.with_suffix("")
-        image_dir.mkdir(exist_ok=True)
-        for i, page in enumerate(doc):
-            pix = page.get_pixmap(dpi=150)
-            pix.save(str(image_dir / f"page_{i+1:03d}.png"))
-        doc.close()
-        import zipfile
-        import os
-        zip_path = output_path.with_suffix(".zip")
-        with zipfile.ZipFile(zip_path, "w") as zf:
-            for f in sorted(image_dir.iterdir()):
-                zf.write(f, f.name)
-        for f in image_dir.iterdir():
-            f.unlink()
-        image_dir.rmdir()
-        return zip_path
-
-    return _pandoc_convert(input_path, "pdf", target, output_path)
+    raise ValueError(f"PDF -> {target} not supported")
 
 
 def _pdf_extract_table(input_path: Path, target: str, output_path: Path) -> Path:
-    import json
     all_tables = []
     with pdfplumber.open(input_path) as pdf:
         for page in pdf.pages:
             tables = page.extract_tables()
             for table in tables:
-                if table:
-                    headers = table[0] if table else []
+                if table and len(table) > 1:
+                    headers = table[0]
                     for row in table[1:]:
                         if row and any(cell for cell in row):
                             all_tables.append(dict(zip(headers, row)))
 
     if target == "csv":
-        import io
-        csv_buf = io.StringIO()
         if all_tables:
-            import csv
-            writer = csv.DictWriter(csv_buf, fieldnames=all_tables[0].keys())
+            buf = io.StringIO()
+            writer = csv.DictWriter(buf, fieldnames=all_tables[0].keys())
             writer.writeheader()
             writer.writerows(all_tables)
-            output_path.write_text(csv_buf.getvalue(), encoding="utf-8")
+            output_path.write_text(buf.getvalue(), encoding="utf-8")
         else:
             output_path.write_text("", encoding="utf-8")
         return output_path
@@ -129,19 +112,67 @@ def _pdf_extract_table(input_path: Path, target: str, output_path: Path) -> Path
         return output_path
 
     if target == "xlsx":
-        csv_path = output_path.with_suffix(".csv")
-        convert_document(input_path, "pdf", "csv")
-        return csv_to_xlsx(csv_path, output_path)
+        if all_tables:
+            import pandas as pd
+            df = pd.DataFrame(all_tables)
+            df.to_excel(output_path, index=False)
+        else:
+            import pandas as pd
+            pd.DataFrame().to_excel(output_path, index=False)
+        return output_path
 
-    raise ValueError(f"PDF -> {target} table extraction failed")
+    raise ValueError(f"PDF table -> {target}")
 
 
 def _convert_from_docx(input_path: Path, target: str, output_path: Path) -> Path:
-    if target in ("pdf", "html", "md", "txt", "tex", "rtf"):
-        return _pandoc_convert(input_path, "docx", target, output_path)
+    doc = Document(input_path)
+
+    if target == "txt":
+        text = "\n".join(p.text for p in doc.paragraphs)
+        output_path.write_text(text, encoding="utf-8")
+        return output_path
+
+    if target == "md":
+        md_lines = []
+        for p in doc.paragraphs:
+            style = p.style.name.lower() if p.style else ""
+            text = p.text
+            if not text:
+                md_lines.append("")
+            elif "heading 1" in style:
+                md_lines.append(f"# {text}")
+            elif "heading 2" in style:
+                md_lines.append(f"## {text}")
+            elif "heading 3" in style:
+                md_lines.append(f"### {text}")
+            else:
+                md_lines.append(text)
+        output_path.write_text("\n\n".join(md_lines), encoding="utf-8")
+        return output_path
+
+    if target == "html":
+        html_parts = ['<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>']
+        for p in doc.paragraphs:
+            style = p.style.name.lower() if p.style else ""
+            text = p.text
+            if not text:
+                html_parts.append("<br>")
+            elif "heading 1" in style:
+                html_parts.append(f"<h1>{text}</h1>")
+            elif "heading 2" in style:
+                html_parts.append(f"<h2>{text}</h2>")
+            elif "heading 3" in style:
+                html_parts.append(f"<h3>{text}</h3>")
+            else:
+                html_parts.append(f"<p>{text}</p>")
+        html_parts.append("</body></html>")
+        output_path.write_text("\n".join(html_parts), encoding="utf-8")
+        return output_path
+
+    if target == "pdf":
+        return _docx_to_pdf_via_txt(doc, output_path)
 
     if target == "xml":
-        doc = Document(input_path)
         xml_parts = ['<?xml version="1.0" encoding="UTF-8"?>', '<document>']
         for para in doc.paragraphs:
             xml_parts.append(f'  <paragraph>{para.text}</paragraph>')
@@ -149,7 +180,22 @@ def _convert_from_docx(input_path: Path, target: str, output_path: Path) -> Path
         output_path.write_text("\n".join(xml_parts), encoding="utf-8")
         return output_path
 
-    raise ValueError(f"Unsupported conversion: docx -> {target}")
+    raise ValueError(f"DOCX -> {target} not supported")
+
+
+def _docx_to_pdf_via_txt(doc: Document, output_path: Path) -> Path:
+    from fpdf import FPDF
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Helvetica", size=11)
+    for p in doc.paragraphs:
+        text = p.text
+        if text.strip():
+            pdf.multi_cell(0, 6, text)
+        else:
+            pdf.ln(6)
+    pdf.output(str(output_path))
+    return output_path
 
 
 def _convert_from_xlsx(input_path: Path, target: str, output_path: Path) -> Path:
@@ -158,23 +204,9 @@ def _convert_from_xlsx(input_path: Path, target: str, output_path: Path) -> Path
 
     if target == "csv":
         df.to_csv(output_path, index=False)
-        return output_path
-
-    if target == "json":
+    elif target == "json":
         df.to_json(output_path, orient="records", force_ascii=False, indent=2)
-        return output_path
-
-    if target == "pdf":
-        csv_path = output_path.with_suffix(".csv")
-        df.to_csv(csv_path, index=False)
-        subprocess.run(
-            ["pandoc", str(csv_path), "-o", str(output_path), "--pdf-engine=pdflatex"],
-            capture_output=True, timeout=60
-        )
-        csv_path.unlink(missing_ok=True)
-        return output_path
-
-    if target == "sql":
+    elif target == "sql":
         table_name = input_path.stem.replace(" ", "_").replace("-", "_")
         lines = []
         cols = ", ".join(df.columns)
@@ -182,37 +214,137 @@ def _convert_from_xlsx(input_path: Path, target: str, output_path: Path) -> Path
             vals = ", ".join(f"'{str(v).replace(chr(39), chr(39)+chr(39))}'" for v in row.values)
             lines.append(f"INSERT INTO {table_name} ({cols}) VALUES ({vals});")
         output_path.write_text("\n".join(lines), encoding="utf-8")
+    elif target == "pdf":
+        return _xlsx_to_pdf(df, output_path)
+    elif target == "txt":
+        df.to_csv(output_path, index=False, sep="\t")
+    else:
+        raise ValueError(f"XLSX -> {target}")
+    return output_path
+
+
+def _xlsx_to_pdf(df, output_path: Path) -> Path:
+    from fpdf import FPDF
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Helvetica", size=10)
+    for _, row in df.iterrows():
+        line = " | ".join(str(v) for v in row.values)
+        pdf.cell(0, 7, line, ln=True)
+    pdf.output(str(output_path))
+    return output_path
+
+
+def _convert_from_html(input_path: Path, target: str, output_path: Path) -> Path:
+    content = input_path.read_text(encoding="utf-8")
+
+    if target == "txt":
+        from html.parser import HTMLParser
+        class TextExtractor(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.text = []
+            def handle_data(self, data):
+                self.text.append(data)
+        extractor = TextExtractor()
+        extractor.feed(content)
+        output_path.write_text(" ".join(extractor.text), encoding="utf-8")
         return output_path
 
-    if target == "parquet":
-        df.to_parquet(output_path)
+    if target == "docx":
+        from html.parser import HTMLParser
+        doc = Document()
+        current_text = []
+
+        class HTMLHandler(HTMLParser):
+            def handle_data(self, data):
+                if data.strip():
+                    current_text.append(data.strip())
+            def handle_endtag(self, tag):
+                if tag in ('p', 'h1', 'h2', 'h3', 'h4', 'div', 'br', 'li'):
+                    if current_text:
+                        doc.add_paragraph(" ".join(current_text))
+                        current_text.clear()
+
+        handler = HTMLHandler()
+        handler.feed(content)
+        if current_text:
+            doc.add_paragraph(" ".join(current_text))
+        doc.save(str(output_path))
         return output_path
 
-    if target == "feather":
-        df.to_feather(output_path)
+    if target == "md":
+        text_path = output_path.with_suffix(".txt")
+        _convert_from_html(input_path, "txt")
+        output_path.write_text(input_path.read_text() if False else "", encoding="utf-8")
+        import re
+        text = re.sub(r'<[^>]+>', '', content)
+        output_path.write_text(text.strip(), encoding="utf-8")
         return output_path
 
-    raise ValueError(f"Unsupported conversion: xlsx -> {target}")
+    raise ValueError(f"HTML -> {target}")
 
 
-def _pandoc_convert(input_path: Path, source_fmt: str, target_fmt: str, output_path: Path) -> Path:
-    pandoc_formats = {
-        "docx": "docx", "pdf": "pdf", "html": "html", "md": "markdown",
-        "txt": "plain", "rtf": "rtf", "doc": "doc", "tex": "latex",
-        "csv": "csv",
-    }
+def _convert_from_md(input_path: Path, target: str, output_path: Path) -> Path:
+    import markdown
+    content = input_path.read_text(encoding="utf-8")
 
-    src = pandoc_formats.get(source_fmt, source_fmt)
-    dst = pandoc_formats.get(target_fmt, target_fmt)
+    if target == "html":
+        html = markdown.markdown(content)
+        full = f'<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>\n{html}\n</body></html>'
+        output_path.write_text(full, encoding="utf-8")
+        return output_path
 
-    cmd = ["pandoc", str(input_path), "-f", src, "-t", dst, "-o", str(output_path)]
+    if target == "docx":
+        html = markdown.markdown(content)
+        temp_html = output_path.with_suffix(".html")
+        temp_html.write_text(html, encoding="utf-8")
+        return _convert_from_html(temp_html, "docx")
 
-    if target_fmt == "pdf":
-        cmd.extend(["--pdf-engine=pdflatex"])
+    if target == "txt":
+        html = markdown.markdown(content)
+        from html.parser import HTMLParser
+        class T(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.t = []
+            def handle_data(self, d):
+                self.t.append(d)
+        ex = T()
+        ex.feed(html)
+        output_path.write_text("\n".join(ex.t), encoding="utf-8")
+        return output_path
 
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+    if target == "pdf":
+        html = markdown.markdown(content)
+        from fpdf import FPDF
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Helvetica", size=11)
+        for line in html.split("\n"):
+            clean = line.replace("<p>","").replace("</p>","").replace("<h1>","").replace("</h1>","").replace("<h2>","").replace("</h2>","").replace("<h3>","").replace("</h3>","")
+            if clean.strip():
+                pdf.multi_cell(0, 6, clean.strip())
+        pdf.output(str(output_path))
+        return output_path
 
-    if result.returncode != 0:
-        raise RuntimeError(f"Pandoc conversion failed: {result.stderr}")
+    raise ValueError(f"MD -> {target}")
 
+
+def _txt_to_docx(input_path: Path, output_path: Path) -> Path:
+    doc = Document()
+    for line in input_path.read_text(encoding="utf-8").split("\n"):
+        doc.add_paragraph(line)
+    doc.save(str(output_path))
+    return output_path
+
+
+def _txt_to_pdf(input_path: Path, output_path: Path) -> Path:
+    from fpdf import FPDF
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Helvetica", size=11)
+    for line in input_path.read_text(encoding="utf-8").split("\n"):
+        pdf.cell(0, 7, line, ln=True)
+    pdf.output(str(output_path))
     return output_path
