@@ -1,4 +1,4 @@
-const API_BASE = ''
+const API_BASE = 'https://cai224.pythonanywhere.com'
 
 export async function convertOnServer(file, targetFormat) {
   const formData = new FormData()
