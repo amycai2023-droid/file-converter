@@ -173,10 +173,11 @@ def _convert_from_docx(input_path: Path, target: str, output_path: Path) -> Path
         pdf = FPDF()
         pdf.add_page()
         pdf.set_font("Helvetica", size=11)
+        width = pdf.epw
         for p in doc.paragraphs:
             text = p.text
             if text.strip():
-                pdf.multi_cell(0, 6, text)
+                pdf.multi_cell(width, 6, text)
             else:
                 pdf.ln(6)
         pdf.output(str(output_path))
@@ -214,9 +215,10 @@ def _convert_from_xlsx(input_path: Path, target: str, output_path: Path) -> Path
         pdf = FPDF()
         pdf.add_page()
         pdf.set_font("Helvetica", size=10)
+        width = pdf.epw
         for _, row in df.iterrows():
             line = " | ".join(str(v) for v in row.values)
-            pdf.cell(0, 7, line, ln=True)
+            pdf.cell(width, 7, line, ln=True)
         pdf.output(str(output_path))
     elif target == "txt":
         df.to_csv(output_path, index=False, sep="\t")
@@ -324,10 +326,11 @@ def _convert_from_md(input_path: Path, target: str, output_path: Path) -> Path:
         pdf = FPDF()
         pdf.add_page()
         pdf.set_font("Helvetica", size=11)
+        width = pdf.epw
         for line in html.split("\n"):
             clean = line.replace("<p>","").replace("</p>","").replace("<h1>","").replace("</h1>","").replace("<h2>","").replace("</h2>","").replace("<h3>","").replace("</h3>","")
             if clean.strip():
-                pdf.multi_cell(0, 6, clean.strip())
+                pdf.multi_cell(width, 6, clean.strip())
         pdf.output(str(output_path))
         return output_path
 
@@ -348,7 +351,8 @@ def _txt_convert(input_path: Path, target: str, output_path: Path) -> Path:
         pdf = FPDF()
         pdf.add_page()
         pdf.set_font("Helvetica", size=11)
+        width = pdf.epw
         for line in input_path.read_text(encoding="utf-8").split("\n"):
-            pdf.cell(0, 7, line, ln=True)
+            pdf.cell(width, 7, line, ln=True)
         pdf.output(str(output_path))
         return output_path

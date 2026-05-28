@@ -86,7 +86,7 @@ def _route_conversion(input_path: Path, source_ext: str, target_ext: str) -> Pat
     if source_ext in doc_formats or target_ext in doc_formats:
         try:
             return convert_document(input_path, source_ext, target_ext)
-        except Exception:
+        except ValueError:
             pass
 
     if source_ext in DATA_FORMATS | {"csv", "json", "xml", "yaml", "toml", "tsv"} or \
