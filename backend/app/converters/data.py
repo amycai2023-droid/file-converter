@@ -25,6 +25,8 @@ def convert_data(input_path: Path, source_ext: str, target_ext: str) -> Path:
         return _from_parquet(input_path, t, output_path)
     if s == "feather":
         return _from_feather(input_path, t, output_path)
+    if s == "sql":
+        return _from_sql(input_path, t, output_path)
 
     raise ValueError(f"Unsupported data conversion: {s} -> {t}")
 
@@ -37,9 +39,17 @@ def _from_csv(input_path: Path, target: str, output_path: Path) -> Path:
     elif target == "json": df.to_json(output_path, orient="records", force_ascii=False, indent=2)
     elif target == "parquet": df.to_parquet(output_path)
     elif target == "feather": df.to_feather(output_path)
-    elif target == "sql": _df_to_sql(df, input_path.stem, output_path)
+    elif target == "sql": _df_to_sql(df, output_path.stem, output_path)
     elif target == "tsv": df.to_csv(output_path, sep="\t", index=False)
     elif target == "txt": output_path.write_text(input_path.read_text(encoding="utf-8"), encoding="utf-8")
+    elif target == "xml": _dict_to_xml(json.loads(df.to_json(orient="records", force_ascii=False)), output_path, "csv")
+    elif target == "yaml":
+        import yaml
+        output_path.write_text(yaml.dump(json.loads(df.to_json(orient="records", force_ascii=False)), allow_unicode=True), encoding="utf-8")
+    elif target == "toml":
+        import toml
+        records = json.loads(df.to_json(orient="records", force_ascii=False))
+        output_path.write_text(toml.dumps({"records": records}), encoding="utf-8")
     else: raise ValueError(f"csv -> {target}")
     return output_path
 
@@ -57,16 +67,25 @@ def _from_json(content: str, target: str, output_path: Path) -> Path:
         output_path.write_text(yaml.dump(data, allow_unicode=True), encoding="utf-8")
     elif target == "xml":
         _dict_to_xml(data, output_path)
+    elif target == "toml":
+        import toml
+        d = data if not isinstance(data, list) else {"data": data}
+        output_path.write_text(toml.dumps(d), encoding="utf-8")
     elif target == "sql":
         import pandas as pd
         d = data if isinstance(data, list) else [data]
-        _df_to_sql(pd.DataFrame(d), input_path.stem, output_path)
+        _df_to_sql(pd.DataFrame(d), output_path.stem, output_path)
     elif target == "parquet":
         import pandas as pd
         d = data if isinstance(data, list) else [data]
         pd.DataFrame(d).to_parquet(output_path)
     elif target == "txt":
         output_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    elif target == "tsv":
+        import pandas as pd
+        import io
+        d = data if isinstance(data, list) else [data]
+        pd.DataFrame(d).to_csv(output_path, sep="\t", index=False)
     else: raise ValueError(f"json -> {target}")
     return output_path
 
@@ -82,12 +101,26 @@ def _from_xml(content: str, target: str, output_path: Path) -> Path:
             if len(node) == 0: return node.text
             return {child.tag: parse(child) for child in node}
         output_path.write_text(yaml.dump(parse(root), allow_unicode=True), encoding="utf-8")
+    elif target == "toml":
+        import toml
+        from lxml import etree
+        root = etree.fromstring(content.encode())
+        def parse(node):
+            if len(node) == 0: return node.text
+            return {child.tag: parse(child) for child in node}
+        output_path.write_text(toml.dumps(parse(root)), encoding="utf-8")
+    elif target == "xlsx":
+        from lxml import etree
+        import pandas as pd
+        root = etree.fromstring(content.encode())
+        rows = [{sub.tag: sub.text for sub in child} for child in root if len(child)]
+        pd.DataFrame(rows).to_excel(output_path, index=False)
     elif target == "sql":
         from lxml import etree
         import pandas as pd
         root = etree.fromstring(content.encode())
         rows = [{sub.tag: sub.text for sub in child} for child in root]
-        _df_to_sql(pd.DataFrame(rows), input_path.stem, output_path)
+        _df_to_sql(pd.DataFrame(rows), output_path.stem, output_path)
     elif target == "txt":
         output_path.write_text(content, encoding="utf-8")
     else: raise ValueError(f"xml -> {target}")
@@ -101,8 +134,28 @@ def _from_yaml(content: str, target: str, output_path: Path) -> Path:
         output_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     elif target == "xml":
         _dict_to_xml(data, output_path)
+    elif target == "csv":
+        import pandas as pd
+        d = data if isinstance(data, list) else [data]
+        pd.DataFrame(d).to_csv(output_path, index=False)
+    elif target == "xlsx":
+        import pandas as pd
+        d = data if isinstance(data, list) else [data]
+        pd.DataFrame(d).to_excel(output_path, index=False)
+    elif target == "toml":
+        import toml
+        d = data if not isinstance(data, list) else {"data": data}
+        output_path.write_text(toml.dumps(d), encoding="utf-8")
+    elif target == "sql":
+        import pandas as pd
+        d = data if isinstance(data, list) else [data]
+        _df_to_sql(pd.DataFrame(d), output_path.stem, output_path)
+    elif target == "parquet":
+        import pandas as pd
+        d = data if isinstance(data, list) else [data]
+        pd.DataFrame(d).to_parquet(output_path)
     elif target == "txt":
-        output_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        output_path.write_text(yaml.dump(data, allow_unicode=True), encoding="utf-8")
     else: raise ValueError(f"yaml -> {target}")
     return output_path
 
@@ -115,8 +168,22 @@ def _from_toml(content: str, target: str, output_path: Path) -> Path:
     elif target == "yaml":
         import yaml
         output_path.write_text(yaml.dump(data, allow_unicode=True), encoding="utf-8")
+    elif target == "xml":
+        _dict_to_xml(data, output_path)
+    elif target == "csv":
+        import pandas as pd
+        d = data if isinstance(data, list) else [data]
+        pd.DataFrame(d).to_csv(output_path, index=False)
+    elif target == "xlsx":
+        import pandas as pd
+        d = data if isinstance(data, list) else [data]
+        pd.DataFrame(d).to_excel(output_path, index=False)
+    elif target == "sql":
+        import pandas as pd
+        d = data if isinstance(data, list) else [data]
+        _df_to_sql(pd.DataFrame(d), output_path.stem, output_path)
     elif target == "txt":
-        output_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        output_path.write_text(toml.dumps(data), encoding="utf-8")
     else: raise ValueError(f"toml -> {target}")
     return output_path
 
@@ -128,8 +195,17 @@ def _from_excel(input_path: Path, target: str, output_path: Path) -> Path:
     elif target == "json": df.to_json(output_path, orient="records", force_ascii=False, indent=2)
     elif target == "parquet": df.to_parquet(output_path)
     elif target == "feather": df.to_feather(output_path)
-    elif target == "sql": _df_to_sql(df, input_path.stem, output_path)
+    elif target == "sql": _df_to_sql(df, output_path.stem, output_path)
     elif target == "tsv": df.to_csv(output_path, sep="\t", index=False)
+    elif target == "xml": _dict_to_xml(json.loads(df.to_json(orient="records", force_ascii=False)), output_path, "excel")
+    elif target == "yaml":
+        import yaml
+        output_path.write_text(yaml.dump(json.loads(df.to_json(orient="records", force_ascii=False)), allow_unicode=True), encoding="utf-8")
+    elif target == "toml":
+        import toml
+        output_path.write_text(toml.dumps({"records": json.loads(df.to_json(orient="records", force_ascii=False))}), encoding="utf-8")
+    elif target == "txt":
+        output_path.write_text(df.to_csv(index=False), encoding="utf-8")
     else: raise ValueError(f"{input_path.suffix} -> {target}")
     return output_path
 
@@ -140,6 +216,9 @@ def _from_tsv(input_path: Path, target: str, output_path: Path) -> Path:
     if target == "csv": df.to_csv(output_path, index=False)
     elif target == "xlsx": df.to_excel(output_path, index=False)
     elif target == "json": df.to_json(output_path, orient="records", force_ascii=False, indent=2)
+    elif target == "parquet": df.to_parquet(output_path)
+    elif target == "feather": df.to_feather(output_path)
+    elif target == "sql": _df_to_sql(df, output_path.stem, output_path)
     else: raise ValueError(f"tsv -> {target}")
     return output_path
 
@@ -149,7 +228,10 @@ def _from_parquet(input_path: Path, target: str, output_path: Path) -> Path:
     df = pd.read_parquet(input_path)
     if target == "csv": df.to_csv(output_path, index=False)
     elif target == "json": df.to_json(output_path, orient="records", force_ascii=False, indent=2)
+    elif target == "xlsx": df.to_excel(output_path, index=False)
     elif target == "feather": df.to_feather(output_path)
+    elif target == "sql": _df_to_sql(df, output_path.stem, output_path)
+    elif target == "tsv": df.to_csv(output_path, sep="\t", index=False)
     else: raise ValueError(f"parquet -> {target}")
     return output_path
 
@@ -158,7 +240,11 @@ def _from_feather(input_path: Path, target: str, output_path: Path) -> Path:
     import pandas as pd
     df = pd.read_feather(input_path)
     if target == "csv": df.to_csv(output_path, index=False)
+    elif target == "json": df.to_json(output_path, orient="records", force_ascii=False, indent=2)
+    elif target == "xlsx": df.to_excel(output_path, index=False)
     elif target == "parquet": df.to_parquet(output_path)
+    elif target == "sql": _df_to_sql(df, output_path.stem, output_path)
+    elif target == "tsv": df.to_csv(output_path, sep="\t", index=False)
     else: raise ValueError(f"feather -> {target}")
     return output_path
 
@@ -235,3 +321,60 @@ def _xml_to_csv(content: str, output_path: Path) -> None:
     root = etree.fromstring(content.encode())
     rows = [{sub.tag: sub.text for sub in child} for child in root if len(child)]
     pd.DataFrame(rows).to_csv(output_path, index=False)
+
+
+def _from_sql(input_path: Path, target: str, output_path: Path) -> Path:
+    import pandas as pd
+    import re
+    content = input_path.read_text(encoding="utf-8")
+    tables = {}
+
+    insert_pattern = re.compile(
+        r'INSERT\s+INTO\s+[`"\[]?(\w+)[`"\]]?\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)',
+        re.IGNORECASE
+    )
+    for m in insert_pattern.finditer(content):
+        tname = m.group(1)
+        cols = [c.strip().strip('`"[]') for c in m.group(2).split(",")]
+        vals = []
+        for v in re.split(r',(?=(?:[^\']*\'[^\']*\')*[^\']*$)', m.group(3)):
+            v = v.strip()
+            if v.startswith("'") and v.endswith("'"):
+                v = v[1:-1]
+            vals.append(v)
+        if tname not in tables:
+            tables[tname] = {"cols": cols, "rows": []}
+        tables[tname]["rows"].append(vals)
+
+    df = None
+    if tables:
+        _, info = tables.popitem()
+        df = pd.DataFrame(info["rows"], columns=info["cols"])
+    else:
+        df = pd.DataFrame()
+
+    if target == "csv":
+        df.to_csv(output_path, index=False)
+    elif target == "json":
+        df.to_json(output_path, orient="records", force_ascii=False, indent=2)
+    elif target == "xlsx":
+        df.to_excel(output_path, index=False)
+    elif target == "parquet":
+        df.to_parquet(output_path)
+    elif target == "feather":
+        df.to_feather(output_path)
+    elif target == "tsv":
+        df.to_csv(output_path, sep="\t", index=False)
+    elif target == "xml":
+        _dict_to_xml(json.loads(df.to_json(orient="records", force_ascii=False)), output_path, "sql")
+    elif target == "yaml":
+        import yaml
+        output_path.write_text(yaml.dump(json.loads(df.to_json(orient="records", force_ascii=False)), allow_unicode=True), encoding="utf-8")
+    elif target == "toml":
+        import toml
+        output_path.write_text(toml.dumps({"records": json.loads(df.to_json(orient="records", force_ascii=False))}), encoding="utf-8")
+    elif target == "txt":
+        output_path.write_text(content, encoding="utf-8")
+    else:
+        raise ValueError(f"sql -> {target}")
+    return output_path
