@@ -1,12 +1,11 @@
 {
   "functions": {
-    "api/index.py": {
+    "api/convert.py": {
       "memory": 1024,
       "maxDuration": 10
     }
   },
   "rewrites": [
-    { "source": "/api/(.*)", "destination": "/api/index" },
     { "source": "/((?!api).*)", "destination": "/index.html" }
   ]
 }

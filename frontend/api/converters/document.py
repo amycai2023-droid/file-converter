@@ -1,12 +1,7 @@
-import subprocess
 import json
 import io
 import csv
 from pathlib import Path
-from .data import csv_to_xlsx
-
-import pdfplumber
-from docx import Document
 
 
 def convert_document(input_path: Path, source_ext: str, target_ext: str) -> Path:
@@ -23,16 +18,15 @@ def convert_document(input_path: Path, source_ext: str, target_ext: str) -> Path
         return _convert_from_html(input_path, t, output_path)
     if s == "md":
         return _convert_from_md(input_path, t, output_path)
-
-    if s == "txt" and t == "docx":
-        return _txt_to_docx(input_path, output_path)
-    if s == "txt" and t == "pdf":
-        return _txt_to_pdf(input_path, output_path)
+    if s == "txt" and t in ("docx", "pdf"):
+        return _txt_convert(input_path, t, output_path)
 
     raise ValueError(f"Unsupported conversion: {s} -> {t}")
 
 
 def _convert_from_pdf(input_path: Path, target: str, output_path: Path) -> Path:
+    import pdfplumber
+
     if target == "txt":
         text = ""
         with pdfplumber.open(input_path) as pdf:
@@ -57,6 +51,7 @@ def _convert_from_pdf(input_path: Path, target: str, output_path: Path) -> Path:
         return output_path
 
     if target == "docx":
+        from docx import Document
         doc = Document()
         with pdfplumber.open(input_path) as pdf:
             for page in pdf.pages:
@@ -85,6 +80,8 @@ def _convert_from_pdf(input_path: Path, target: str, output_path: Path) -> Path:
 
 
 def _pdf_extract_table(input_path: Path, target: str, output_path: Path) -> Path:
+    import pdfplumber
+
     all_tables = []
     with pdfplumber.open(input_path) as pdf:
         for page in pdf.pages:
@@ -112,6 +109,7 @@ def _pdf_extract_table(input_path: Path, target: str, output_path: Path) -> Path
         return output_path
 
     if target == "xlsx":
+        from .data import csv_to_xlsx
         if all_tables:
             import pandas as pd
             df = pd.DataFrame(all_tables)
@@ -125,6 +123,7 @@ def _pdf_extract_table(input_path: Path, target: str, output_path: Path) -> Path
 
 
 def _convert_from_docx(input_path: Path, target: str, output_path: Path) -> Path:
+    from docx import Document
     doc = Document(input_path)
 
     if target == "txt":
@@ -170,7 +169,19 @@ def _convert_from_docx(input_path: Path, target: str, output_path: Path) -> Path
         return output_path
 
     if target == "pdf":
-        return _docx_to_pdf_via_txt(doc, output_path)
+        from fpdf import FPDF
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Helvetica", size=11)
+        width = pdf.epw
+        for p in doc.paragraphs:
+            text = p.text
+            if text.strip():
+                pdf.multi_cell(width, 6, text)
+            else:
+                pdf.ln(6)
+        pdf.output(str(output_path))
+        return output_path
 
     if target == "xml":
         xml_parts = ['<?xml version="1.0" encoding="UTF-8"?>', '<document>']
@@ -181,21 +192,6 @@ def _convert_from_docx(input_path: Path, target: str, output_path: Path) -> Path
         return output_path
 
     raise ValueError(f"DOCX -> {target} not supported")
-
-
-def _docx_to_pdf_via_txt(doc: Document, output_path: Path) -> Path:
-    from fpdf import FPDF
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Helvetica", size=11)
-    for p in doc.paragraphs:
-        text = p.text
-        if text.strip():
-            pdf.multi_cell(0, 6, text)
-        else:
-            pdf.ln(6)
-    pdf.output(str(output_path))
-    return output_path
 
 
 def _convert_from_xlsx(input_path: Path, target: str, output_path: Path) -> Path:
@@ -215,23 +211,19 @@ def _convert_from_xlsx(input_path: Path, target: str, output_path: Path) -> Path
             lines.append(f"INSERT INTO {table_name} ({cols}) VALUES ({vals});")
         output_path.write_text("\n".join(lines), encoding="utf-8")
     elif target == "pdf":
-        return _xlsx_to_pdf(df, output_path)
+        from fpdf import FPDF
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Helvetica", size=10)
+        width = pdf.epw
+        for _, row in df.iterrows():
+            line = " | ".join(str(v) for v in row.values)
+            pdf.cell(width, 7, line, ln=True)
+        pdf.output(str(output_path))
     elif target == "txt":
         df.to_csv(output_path, index=False, sep="\t")
     else:
         raise ValueError(f"XLSX -> {target}")
-    return output_path
-
-
-def _xlsx_to_pdf(df, output_path: Path) -> Path:
-    from fpdf import FPDF
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Helvetica", size=10)
-    for _, row in df.iterrows():
-        line = " | ".join(str(v) for v in row.values)
-        pdf.cell(0, 7, line, ln=True)
-    pdf.output(str(output_path))
     return output_path
 
 
@@ -252,6 +244,7 @@ def _convert_from_html(input_path: Path, target: str, output_path: Path) -> Path
         return output_path
 
     if target == "docx":
+        from docx import Document
         from html.parser import HTMLParser
         doc = Document()
         current_text = []
@@ -274,9 +267,6 @@ def _convert_from_html(input_path: Path, target: str, output_path: Path) -> Path
         return output_path
 
     if target == "md":
-        text_path = output_path.with_suffix(".txt")
-        _convert_from_html(input_path, "txt")
-        output_path.write_text(input_path.read_text() if False else "", encoding="utf-8")
         import re
         text = re.sub(r'<[^>]+>', '', content)
         output_path.write_text(text.strip(), encoding="utf-8")
@@ -296,14 +286,29 @@ def _convert_from_md(input_path: Path, target: str, output_path: Path) -> Path:
         return output_path
 
     if target == "docx":
-        html = markdown.markdown(content)
-        temp_html = output_path.with_suffix(".html")
-        temp_html.write_text(html, encoding="utf-8")
-        return _convert_from_html(temp_html, "docx")
-
-    if target == "txt":
+        from docx import Document
         html = markdown.markdown(content)
         from html.parser import HTMLParser
+        doc = Document()
+        current = []
+
+        class H(HTMLParser):
+            def handle_data(self, d):
+                if d.strip(): current.append(d.strip())
+            def handle_endtag(self, t):
+                if t in ('p','h1','h2','h3','h4','li') and current:
+                    doc.add_paragraph(" ".join(current))
+                    current.clear()
+
+        H().feed(html)
+        if current:
+            doc.add_paragraph(" ".join(current))
+        doc.save(str(output_path))
+        return output_path
+
+    if target == "txt":
+        from html.parser import HTMLParser
+        html = markdown.markdown(content)
         class T(HTMLParser):
             def __init__(self):
                 super().__init__()
@@ -316,35 +321,38 @@ def _convert_from_md(input_path: Path, target: str, output_path: Path) -> Path:
         return output_path
 
     if target == "pdf":
-        html = markdown.markdown(content)
         from fpdf import FPDF
+        html = markdown.markdown(content)
         pdf = FPDF()
         pdf.add_page()
         pdf.set_font("Helvetica", size=11)
+        width = pdf.epw
         for line in html.split("\n"):
             clean = line.replace("<p>","").replace("</p>","").replace("<h1>","").replace("</h1>","").replace("<h2>","").replace("</h2>","").replace("<h3>","").replace("</h3>","")
             if clean.strip():
-                pdf.multi_cell(0, 6, clean.strip())
+                pdf.multi_cell(width, 6, clean.strip())
         pdf.output(str(output_path))
         return output_path
 
     raise ValueError(f"MD -> {target}")
 
 
-def _txt_to_docx(input_path: Path, output_path: Path) -> Path:
-    doc = Document()
-    for line in input_path.read_text(encoding="utf-8").split("\n"):
-        doc.add_paragraph(line)
-    doc.save(str(output_path))
-    return output_path
+def _txt_convert(input_path: Path, target: str, output_path: Path) -> Path:
+    if target == "docx":
+        from docx import Document
+        doc = Document()
+        for line in input_path.read_text(encoding="utf-8").split("\n"):
+            doc.add_paragraph(line)
+        doc.save(str(output_path))
+        return output_path
 
-
-def _txt_to_pdf(input_path: Path, output_path: Path) -> Path:
-    from fpdf import FPDF
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Helvetica", size=11)
-    for line in input_path.read_text(encoding="utf-8").split("\n"):
-        pdf.cell(0, 7, line, ln=True)
-    pdf.output(str(output_path))
-    return output_path
+    if target == "pdf":
+        from fpdf import FPDF
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.set_font("Helvetica", size=11)
+        width = pdf.epw
+        for line in input_path.read_text(encoding="utf-8").split("\n"):
+            pdf.cell(width, 7, line, ln=True)
+        pdf.output(str(output_path))
+        return output_path
