@@ -95,30 +95,30 @@ def _from_xml(content: str, target: str, output_path: Path) -> Path:
     elif target == "csv": _xml_to_csv(content, output_path)
     elif target == "yaml":
         import yaml
-        from lxml import etree
-        root = etree.fromstring(content.encode())
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(content)
         def parse(node):
             if len(node) == 0: return node.text
             return {child.tag: parse(child) for child in node}
         output_path.write_text(yaml.dump(parse(root), allow_unicode=True), encoding="utf-8")
     elif target == "toml":
         import toml
-        from lxml import etree
-        root = etree.fromstring(content.encode())
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(content)
         def parse(node):
             if len(node) == 0: return node.text
             return {child.tag: parse(child) for child in node}
         output_path.write_text(toml.dumps(parse(root)), encoding="utf-8")
     elif target == "xlsx":
-        from lxml import etree
+        import xml.etree.ElementTree as ET
         import pandas as pd
-        root = etree.fromstring(content.encode())
+        root = ET.fromstring(content)
         rows = [{sub.tag: sub.text for sub in child} for child in root if len(child)]
         pd.DataFrame(rows).to_excel(output_path, index=False)
     elif target == "sql":
-        from lxml import etree
+        import xml.etree.ElementTree as ET
         import pandas as pd
-        root = etree.fromstring(content.encode())
+        root = ET.fromstring(content)
         rows = [{sub.tag: sub.text for sub in child} for child in root]
         _df_to_sql(pd.DataFrame(rows), output_path.stem, output_path)
     elif target == "txt":
@@ -281,26 +281,28 @@ def _df_to_sql(df, table_name: str, output_path: Path) -> None:
 
 
 def _dict_to_xml(data, output_path: Path, root_tag="root") -> None:
-    from lxml import etree
+    import xml.etree.ElementTree as ET
     def build(element, obj):
         if isinstance(obj, dict):
             for k, v in obj.items():
-                child = etree.SubElement(element, k.replace(" ", "_"))
+                child = ET.SubElement(element, k.replace(" ", "_"))
                 build(child, v)
         elif isinstance(obj, list):
             for item in obj:
-                child = etree.SubElement(element, "item")
+                child = ET.SubElement(element, "item")
                 build(child, item)
         else:
             element.text = str(obj) if obj is not None else ""
-    root = etree.Element(root_tag)
+    root = ET.Element(root_tag)
     build(root, data)
-    etree.ElementTree(root).write(str(output_path), pretty_print=True, xml_declaration=True, encoding="UTF-8")
+    tree = ET.ElementTree(root)
+    ET.indent(tree, space="  ")
+    tree.write(str(output_path), xml_declaration=True, encoding="UTF-8")
 
 
 def _xml_to_json(content: str, output_path: Path) -> None:
-    from lxml import etree
-    root = etree.fromstring(content.encode())
+    import xml.etree.ElementTree as ET
+    root = ET.fromstring(content)
     def parse(node):
         if len(node) == 0: return node.text
         result = {}
@@ -316,9 +318,9 @@ def _xml_to_json(content: str, output_path: Path) -> None:
 
 
 def _xml_to_csv(content: str, output_path: Path) -> None:
-    from lxml import etree
+    import xml.etree.ElementTree as ET
     import pandas as pd
-    root = etree.fromstring(content.encode())
+    root = ET.fromstring(content)
     rows = [{sub.tag: sub.text for sub in child} for child in root if len(child)]
     pd.DataFrame(rows).to_csv(output_path, index=False)
 
