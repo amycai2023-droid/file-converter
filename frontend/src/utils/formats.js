@@ -52,6 +52,9 @@ const FORMAT_MAP = {
   parquet: ['csv', 'json', 'feather', 'xlsx', 'sql', 'tsv'],
   feather: ['csv', 'parquet', 'json', 'xlsx', 'sql', 'tsv'],
   numbers: ['xlsx', 'xls', 'csv', 'tsv', 'pdf', 'json', 'txt'],
+  jpg: ['pdf', 'docx', 'txt', 'xlsx', 'csv', 'tsv', 'json'],
+  jpeg: ['pdf', 'docx', 'txt', 'xlsx', 'csv', 'tsv', 'json'],
+  png: ['pdf', 'docx', 'txt', 'xlsx', 'csv', 'tsv', 'json'],
 }
 
 export function isServerConversion(sourceExt, targetExt) {
@@ -76,9 +79,11 @@ export function fileTypeCategory(ext) {
   const docs = ['txt', 'md', 'docx', 'pdf', 'html', 'rtf', 'doc', 'tex']
   const data = ['csv', 'xlsx', 'xls', 'tsv', 'json', 'xml', 'yaml', 'toml', 'ini', 'sql', 'parquet', 'feather']
   const apple = ['numbers']
+  const image = ['jpg', 'jpeg', 'png']
 
   if (docs.includes(ext)) return 'document'
   if (data.includes(ext)) return 'data'
   if (apple.includes(ext)) return 'apple'
+  if (image.includes(ext)) return 'image'
   return 'other'
 }

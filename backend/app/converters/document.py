@@ -18,6 +18,9 @@ def convert_document(input_path: Path, source_ext: str, target_ext: str) -> Path
         return _convert_from_html(input_path, t, output_path)
     if s == "md":
         return _convert_from_md(input_path, t, output_path)
+    if s in ("jpg", "jpeg", "png"):
+        return _convert_from_image(input_path, t, output_path)
+
     if s == "txt" and t in ("docx", "pdf"):
         return _txt_convert(input_path, t, output_path)
 
@@ -52,14 +55,48 @@ def _convert_from_pdf(input_path: Path, target: str, output_path: Path) -> Path:
 
     if target == "docx":
         from docx import Document
+        from docx.shared import Inches, Pt
         doc = Document()
         with pdfplumber.open(input_path) as pdf:
             for page in pdf.pages:
-                text = page.extract_text()
-                if text:
-                    for line in text.split("\n"):
-                        if line.strip():
-                            doc.add_paragraph(line.strip())
+                tables = page.find_tables()
+                if not tables:
+                    text = page.extract_text()
+                    if text:
+                        for line in text.split("\n"):
+                            if line.strip():
+                                doc.add_paragraph(line.strip())
+                    continue
+
+                table_bboxes = [(t.bbox[1], t.bbox[3]) for t in tables]
+                text_segments = _extract_text_outside_tables(page, table_bboxes)
+
+                for seg in text_segments:
+                    if seg["type"] == "text":
+                        for line in seg["text"].split("\n"):
+                            if line.strip():
+                                doc.add_paragraph(line.strip())
+                    elif seg["type"] == "table":
+                        tbl = seg["data"]
+                        if tbl and len(tbl) > 0:
+                            max_cols = max((len(r) for r in tbl if r), default=0)
+                            non_empty = sum(1 for r in tbl for c in (r or []) if c and str(c).strip())
+                            if max_cols >= 2 and non_empty >= 3:
+                                dtable = doc.add_table(rows=len(tbl), cols=max_cols)
+                                dtable.style = 'Table Grid'
+                                for i, row in enumerate(tbl):
+                                    for j in range(max_cols):
+                                        cell_text = row[j] if row and j < len(row) else ""
+                                        cell = dtable.cell(i, j)
+                                        cell.text = str(cell_text) if cell_text else ""
+                                        for p in cell.paragraphs:
+                                            for run in p.runs:
+                                                run.font.size = Pt(9)
+                            elif tbl:
+                                for row in tbl:
+                                    line = " | ".join(str(c) if c else "" for c in (row or []))
+                                    if line.strip():
+                                        doc.add_paragraph(line.strip())
         doc.save(str(output_path))
         return output_path
 
@@ -356,3 +393,52 @@ def _txt_convert(input_path: Path, target: str, output_path: Path) -> Path:
             pdf.cell(width, 7, line, ln=True)
         pdf.output(str(output_path))
         return output_path
+
+
+def _convert_from_image(input_path: Path, target: str, output_path: Path) -> Path:
+    if target == "pdf":
+        from fpdf import FPDF
+        pdf = FPDF()
+        pdf.add_page()
+        pdf.image(str(input_path), x=10, y=10, w=pdf.epw - 20)
+        pdf.output(str(output_path))
+        return output_path
+
+    if target == "docx":
+        from docx import Document
+        from docx.shared import Inches
+        doc = Document()
+        doc.add_picture(str(input_path), width=Inches(5.5))
+        doc.save(str(output_path))
+        return output_path
+
+    raise ValueError(f"Image -> {target} not supported")
+
+
+def _extract_text_outside_tables(page, table_bboxes):
+    segments = []
+    tables = page.extract_tables()
+    page_height = page.height
+    last_y = 0
+
+    sorted_tables = sorted(
+        zip(table_bboxes, tables),
+        key=lambda x: x[0][0]
+    )
+
+    for i, ((top, bottom), tbl_data) in enumerate(sorted_tables):
+        if top > last_y + 5:
+            crop = page.within_bbox((0, last_y, page.width, top))
+            text = crop.extract_text()
+            if text and text.strip():
+                segments.append({"type": "text", "text": text.strip()})
+        segments.append({"type": "table", "data": tbl_data})
+        last_y = bottom
+
+    if last_y < page_height - 5:
+        crop = page.within_bbox((0, last_y, page.width, page_height))
+        text = crop.extract_text()
+        if text and text.strip():
+            segments.append({"type": "text", "text": text.strip()})
+
+    return segments

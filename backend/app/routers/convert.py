@@ -10,6 +10,7 @@ router = APIRouter(prefix="/api", tags=["convert"])
 BROWSER_FORMATS = {"txt", "md", "html", "json", "csv", "tsv", "xml", "yaml", "toml", "ini"}
 DOCUMENT_FORMATS = {"docx", "pdf", "rtf", "doc", "tex"}
 DATA_FORMATS = {"xlsx", "xls", "parquet", "feather", "sql"}
+IMAGE_FORMATS = {"jpg", "jpeg", "png"}
 
 
 @router.get("/health")
@@ -38,6 +39,8 @@ async def get_formats(source: str = ""):
         targets |= DATA_FORMATS
     if source == "numbers":
         targets |= {"xlsx", "xls", "csv", "tsv", "pdf", "json", "txt"}
+    if source in IMAGE_FORMATS:
+        targets |= {"pdf", "docx", "txt", "xlsx", "csv", "tsv", "json"}
 
     targets.discard(source)
     return {"source_format": source, "target_formats": sorted(targets)}
@@ -82,6 +85,13 @@ def _route_conversion(input_path: Path, source_ext: str, target_ext: str) -> Pat
     from ..converters.data import convert_data
 
     doc_formats = DOCUMENT_FORMATS | {"html", "md", "txt", "csv"}
+
+    if source_ext in IMAGE_FORMATS:
+        if target_ext in ("pdf", "docx"):
+            return convert_document(input_path, source_ext, target_ext)
+        else:
+            from ..converters.ocr import convert_image
+            return convert_image(input_path, target_ext)
 
     if source_ext in doc_formats or target_ext in doc_formats:
         try:

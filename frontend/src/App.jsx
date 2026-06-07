@@ -65,6 +65,13 @@ export default function App() {
     setShowFormats(false)
   }
 
+  const handleRetry = () => {
+    setStatus('idle')
+    setError('')
+    setResult(null)
+    setShowFormats(true)
+  }
+
   const handleReset = () => {
     setFile(null)
     setShowFormats(false)
@@ -83,10 +90,10 @@ export default function App() {
       <main className="flex-1 flex flex-col items-center px-4 pb-20">
         <UploadZone file={file} onFileSelect={handleFileSelect} />
 
-        <ConversionProgress status={status} error={error} isServer={isServer} />
+        <ConversionProgress status={status} error={error} isServer={isServer} onRetry={handleRetry} onReset={handleReset} />
         <DownloadButton result={result} onReset={handleReset} />
 
-        {file && status === 'idle' && !result && (
+        {file && (status === 'idle' || status === 'error') && !result && (
           <button
             onClick={handleReset}
             className="mt-4 text-sm text-gray-400 hover:text-gray-600 transition-colors"
